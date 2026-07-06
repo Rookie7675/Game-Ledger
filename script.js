@@ -992,10 +992,25 @@ function deleteKnownCraftable(id){
 /* =========================================================
    EVENT WIRING
    ========================================================= */
+function openSidebar(){
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebarBackdrop').classList.add('open');
+}
+function closeSidebar(){
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarBackdrop').classList.remove('open');
+}
+document.getElementById('sidebarToggleBtn').addEventListener('click', ()=>{
+  const isOpen = document.getElementById('sidebar').classList.contains('open');
+  if(isOpen) closeSidebar(); else openSidebar();
+});
+document.getElementById('sidebarBackdrop').addEventListener('click', closeSidebar);
+
 document.querySelectorAll('.nav-item').forEach(btn=>{
   btn.addEventListener('click', ()=>{
     currentView = btn.dataset.view;
     render();
+    closeSidebar(); // picking a page closes the drawer so you see it full-width
   });
 });
 

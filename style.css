@@ -33,20 +33,53 @@ body{
   max-width:1320px;
   margin:0 auto;
   padding:0 28px;
-  display:grid;
-  grid-template-columns:230px 1fr;
-  gap:28px;
-  align-items:start;
 }
+
+/* ================= SIDEBAR TOGGLE + BACKDROP ================= */
+.sidebar-toggle-btn{
+  position:fixed;
+  top: calc(16px + env(safe-area-inset-top, 0px));
+  left:16px;
+  z-index:70;
+  width:44px;
+  height:44px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:var(--panel);
+  border:1px solid var(--gold);
+  color:var(--gold-bright);
+  font-size:18px;
+  cursor:pointer;
+}
+.sidebar-toggle-btn:hover{ background:var(--gold); color:var(--ink); }
+.sidebar-backdrop{
+  display:none;
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,0.55);
+  z-index:55;
+}
+.sidebar-backdrop.open{ display:block; }
 
 /* ================= SIDEBAR (page navigation) ================= */
 .sidebar{
-  position:sticky;
-  top:24px;
-  border:1px solid var(--line);
+  position:fixed;
+  top:0;
+  left:0;
+  height:100vh;
+  width:270px;
+  max-width:82vw;
+  border-right:1px solid var(--line);
   background:var(--panel);
-  margin-top:48px;
-  flex-shrink:0;
+  z-index:60;
+  overflow-y:auto;
+  transform:translateX(-100%);
+  transition:transform 0.25s ease;
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.sidebar.open{
+  transform:translateX(0);
 }
 .sidebar-head{
   padding:16px 18px;
@@ -170,7 +203,7 @@ body{
 .save-msg.warn{ color:var(--red); }
 
 /* ================= MAIN ================= */
-.main{ min-width:0; }
+.main{ min-width:0; padding-top:64px; }
 .hero{
   border-bottom:1px solid var(--line);
   padding:48px 0 32px 0;
@@ -612,7 +645,6 @@ tbody tr.flash-row td{ animation:flashHighlight 1.2s ease; }
 /* Below this width the tables scroll horizontally on their own —
    the sidebar column stays put and never moves to the top. */
 @media (max-width:720px){
-  .page{ grid-template-columns:170px 1fr; gap:16px; padding:0 14px; }
   .entry-form-inventory, .entry-form-craft{ grid-template-columns:1fr; }
   .tally-row{ grid-template-columns:repeat(2,1fr); }
   h1{ font-size:26px; }
