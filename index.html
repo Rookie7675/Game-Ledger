@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#141a15">
+<title>The Quartermaster's Ledger</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-512.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="page">
+
+  <!-- ================= SIDEBAR: PAGE NAVIGATION ================= -->
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <div class="eyebrow">Guild Quartermaster</div>
+      <h3>The Ledger</h3>
+    </div>
+
+    <nav class="nav-list" id="navList">
+      <button class="nav-item active" data-view="inventory">
+        <div class="row1"><span>📦 Inventory</span></div>
+        <div class="row2" id="navInventoryStats"></div>
+      </button>
+      <button class="nav-item" data-view="crafting">
+        <div class="row1"><span>⚒ Crafting</span></div>
+        <div class="row2" id="navCraftingStats"></div>
+      </button>
+      <button class="nav-item" data-view="reference">
+        <div class="row1"><span>📖 Game Data</span></div>
+        <div class="row2" id="navReferenceStats"></div>
+      </button>
+    </nav>
+
+    <div class="save-panel">
+      <div class="save-panel-head">Save File</div>
+      <div class="save-status" id="saveStatus">Not linked — nothing is saved to disk yet.</div>
+
+      <div class="save-buttons" id="fsaButtons" style="display:none;">
+        <button class="save-btn" id="openSaveFileBtn">📂 Open Save File</button>
+        <button class="save-btn" id="newSaveFileBtn">＋ New Save File</button>
+        <button class="save-btn subtle" id="unlinkSaveFileBtn" style="display:none;">Unlink</button>
+      </div>
+      <p class="save-note" id="fsaUnsupportedNote" style="display:none;">
+        This browser/device can't link a file directly (desktop Chrome, Edge, or Opera only). Use Export/Import below instead — that works everywhere, including this phone.
+      </p>
+
+      <div class="save-divider"></div>
+
+      <div class="save-buttons">
+        <button class="save-btn subtle" id="exportBtn">⬇ Export Backup</button>
+        <button class="save-btn subtle" id="importBtn">⬆ Import Backup</button>
+        <input type="file" id="importFileInput" accept="application/json,.json" style="display:none;">
+      </div>
+      <p class="save-note">Import adds new names into Inventory, Crafting, and Game Data — it won't overwrite anything already here.</p>
+      <div class="save-msg" id="saveMsg"></div>
+    </div>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <div class="main">
+
+    <div class="hero">
+      <h1 id="pageTitle">Storeroom Inventory</h1>
+      <p class="sub" id="pageSub">Everything the guild has on hand, and what's already spoken for.</p>
+
+      <div class="tally-row">
+        <div class="tally">
+          <div class="label">Storeroom Value</div>
+          <div class="num" id="totalStoreValue">0</div>
+        </div>
+        <div class="tally">
+          <div class="label">Used In Crafting</div>
+          <div class="num" id="totalUsedValue">0</div>
+        </div>
+        <div class="tally">
+          <div class="label">Potential Craft Profit</div>
+          <div class="num gold" id="totalCraftProfit">0</div>
+        </div>
+        <div class="tally">
+          <div class="label">Materials · Recipes</div>
+          <div class="num" id="totalEntries">0 · 0</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= INVENTORY VIEW ================= -->
+    <div id="view-inventory" class="view active">
+
+      <div class="section-label">
+        <span class="num">01</span>
+        <h2>Add Material</h2>
+        <div class="rule"></div>
+      </div>
+
+      <div class="entry-panel">
+        <div class="entry-form entry-form-inventory">
+          <div class="field">
+            <label for="matName">Name</label>
+            <input type="text" id="matName" placeholder="e.g. iron" list="knownMaterialsList" autocomplete="off">
+            <datalist id="knownMaterialsList"></datalist>
+          </div>
+          <div class="field">
+            <label for="matAmount">Amount</label>
+            <input type="text" inputmode="decimal" id="matAmount" placeholder="0" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="matPrice">Market Price <span style="opacity:.6">(per unit)</span></label>
+            <input type="text" inputmode="decimal" id="matPrice" placeholder="0" autocomplete="off">
+          </div>
+          <button class="add-btn" id="addMaterialBtn">+ Add</button>
+        </div>
+        <div class="form-msg" id="materialMsg"></div>
+      </div>
+
+      <div class="section-label">
+        <span class="num">02</span>
+        <h2>Inventory</h2>
+        <div class="rule"></div>
+      </div>
+
+      <div class="ledger-panel">
+        <table>
+          <thead>
+            <tr>
+              <th data-key="name" class="al">Name</th>
+              <th data-key="amount">Amount</th>
+              <th data-key="price">Market Price</th>
+              <th data-key="used">Used</th>
+              <th data-key="remaining">Remaining</th>
+              <th data-key="value">Remaining Value</th>
+              <th class="al"></th>
+            </tr>
+          </thead>
+          <tbody id="materialsBody">
+            <tr class="empty-row"><td colspan="7">No materials logged yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ================= CRAFTING VIEW ================= -->
+    <div id="view-crafting" class="view">
+
+      <div class="section-label">
+        <span class="num">01</span>
+        <h2 id="recipeFormTitle">New Craftable Item</h2>
+        <div class="rule"></div>
+      </div>
+
+      <div class="entry-panel">
+        <div class="entry-form entry-form-craft">
+          <div class="field">
+            <label for="recName">Craft Name</label>
+            <input type="text" id="recName" placeholder="e.g. undead shield" list="knownCraftablesList" autocomplete="off">
+            <datalist id="knownCraftablesList"></datalist>
+          </div>
+          <div class="field">
+            <label for="recSellPrice">Sell Price <span style="opacity:.6">(per unit)</span></label>
+            <input type="text" inputmode="decimal" id="recSellPrice" placeholder="0" autocomplete="off">
+          </div>
+        </div>
+
+        <div class="draft-materials" id="draftMaterials"></div>
+        <button class="add-line-btn" id="addDraftRowBtn">+ Add material</button>
+
+        <div class="form-actions">
+          <button class="add-btn" id="saveRecipeBtn">Save Recipe</button>
+          <button class="cancel-btn" id="cancelRecipeBtn" style="display:none;">Cancel edit</button>
+        </div>
+        <div class="form-msg" id="recipeMsg"></div>
+      </div>
+
+      <div class="section-label">
+        <span class="num">02</span>
+        <h2>Craftable Items</h2>
+        <div class="rule"></div>
+      </div>
+
+      <div class="ledger-panel">
+        <table>
+          <thead>
+            <tr>
+              <th class="al">Name</th>
+              <th class="al">Materials Needed</th>
+              <th>Cost / unit</th>
+              <th>Sell Price</th>
+              <th>Profit / unit</th>
+              <th>Max Craftable</th>
+              <th>Potential Profit</th>
+              <th class="al"></th>
+            </tr>
+          </thead>
+          <tbody id="recipesBody">
+            <tr class="empty-row"><td colspan="8">No craftable items yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section-label">
+        <span class="num">03</span>
+        <h2>Best Use of Each Material</h2>
+        <div class="rule"></div>
+      </div>
+
+      <div class="opp-panel" id="oppPanel">
+        <div class="opp-empty">Add craftable items to see which recipe gets the most out of each material.</div>
+      </div>
+    </div>
+
+    <!-- ================= GAME DATA VIEW ================= -->
+    <div id="view-reference" class="view">
+
+      <div class="section-label">
+        <span class="num">01</span>
+        <h2>About This Library</h2>
+        <div class="rule"></div>
+      </div>
+
+      <div class="entry-panel info-block">
+        <p>This is the list of names confirmed to actually exist in <em>Guild Master – Idle Dungeons</em>. Once a category below has at least one entry, Inventory and Crafting will only let you add names that match this list — so you can't accidentally track something that isn't really in the game. An empty category places no restriction yet.</p>
+        <p>I identified your game and checked its official community wiki directly. Its crafting and equipment pages are still marked "work in progress" there, with no recipe quantities published yet — so this list starts empty rather than filled with guesses. Add names below as you confirm them in-game, browse <a href="https://idleguildmaster.wiki.gg/" target="_blank" rel="noopener">idleguildmaster.wiki.gg</a> yourself, or paste me wiki text or a screenshot and I'll add exactly what's shown.</p>
+      </div>
+
+      <div class="section-label">
+        <span class="num">02</span>
+        <h2>Known Materials</h2>
+        <div class="rule"></div>
+      </div>
+
+      <div class="entry-panel">
+        <div class="entry-form entry-form-reference">
+          <div class="field">
+            <label for="refMatName">Name</label>
+            <input type="text" id="refMatName" placeholder="e.g. wolf fang" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="refMatNote">Note <span style="opacity:.6">(optional)</span></label>
+            <input type="text" id="refMatNote" placeholder="drop source, recipe it's used in, etc." autocomplete="off">
+          </div>
+          <button class="add-btn" id="addRefMaterialBtn">+ Add</button>
+        </div>
+        <div class="form-msg" id="refMaterialMsg"></div>
+      </div>
+
+      <div class="ledger-panel">
+        <table>
+          <thead>
+            <tr>
+              <th class="al">Name</th>
+              <th class="al">Note</th>
+              <th class="al">Source</th>
+              <th class="al"></th>
+            </tr>
+          </thead>
+          <tbody id="refMaterialsBody">
+            <tr class="empty-row"><td colspan="4">No known materials yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section-label">
+        <span class="num">03</span>
+        <h2>Known Craftable Items</h2>
+        <div class="rule"></div>
+      </div>
+
+      <div class="entry-panel">
+        <div class="entry-form entry-form-reference">
+          <div class="field">
+            <label for="refCraftName">Name</label>
+            <input type="text" id="refCraftName" placeholder="e.g. undead shield" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="refCraftNote">Note <span style="opacity:.6">(optional)</span></label>
+            <input type="text" id="refCraftNote" placeholder="materials, sell price, etc." autocomplete="off">
+          </div>
+          <button class="add-btn" id="addRefCraftableBtn">+ Add</button>
+        </div>
+        <div class="form-msg" id="refCraftableMsg"></div>
+      </div>
+
+      <div class="ledger-panel">
+        <table>
+          <thead>
+            <tr>
+              <th class="al">Name</th>
+              <th class="al">Note</th>
+              <th class="al">Source</th>
+              <th class="al"></th>
+            </tr>
+          </thead>
+          <tbody id="refCraftablesBody">
+            <tr class="empty-row"><td colspan="4">No known craftable items yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="foot-note">Nothing is stored in this browser. Link a save file (Chrome/Edge) to autosave to disk, or use Export/Import to carry a backup file by hand.</div>
+
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
