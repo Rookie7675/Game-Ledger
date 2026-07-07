@@ -1075,7 +1075,16 @@ loadData();
 // file:// page, so this silently does nothing until then.
 if('serviceWorker' in navigator){
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('service-worker.js').catch((err) => {
+    navigator.serviceWorker.register('service-worker.js').then((registration) => {
+      registration.update(); // check for a newer service-worker.js right away, don't wait for the browser's own timer
+
+      let hasReloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if(hasReloaded) return; // guard against a reload loop
+        hasReloaded = true;
+        window.location.reload();
+      });
+    }).catch((err) => {
       console.log('Service worker not active (expected if opened as a local file):', err.message);
     });
   });
