@@ -53,6 +53,7 @@ body{
   cursor:pointer;
 }
 .sidebar-toggle-btn:hover{ background:var(--gold); color:var(--ink); }
+.sidebar-toggle-btn.hidden{ display:none; }
 .sidebar-backdrop{
   display:none;
   position:fixed;
@@ -81,6 +82,23 @@ body{
 .sidebar.open{
   transform:translateX(0);
 }
+.sidebar-close-btn{
+  position:absolute;
+  top:14px;
+  right:14px;
+  width:32px;
+  height:32px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:none;
+  border:1px solid var(--line);
+  color:var(--text-dim);
+  font-size:15px;
+  cursor:pointer;
+  z-index:1;
+}
+.sidebar-close-btn:hover{ border-color:var(--gold); color:var(--gold-bright); }
 .sidebar-head{
   padding:16px 18px;
   border-bottom:1px solid var(--line);

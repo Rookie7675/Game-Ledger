@@ -84,12 +84,38 @@ function saveRecipes(){ persist(); }
 function saveKnownMaterials(){ persist(); }
 function saveKnownCraftables(){ persist(); }
 
+const AUTOSAVE_KEY = 'guild-ledger-autosave';
+
+// Keeps your data on THIS device across closing the app/tab, even without a
+// linked file. Invisible, and separate from Export/Link — those still make
+// a real, portable file when you want one.
+function saveAutosave(){
+  try{
+    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(getFullState()));
+  }catch(err){
+    console.error('Local autosave failed', err);
+  }
+}
+function loadAutosave(){
+  try{
+    const raw = localStorage.getItem(AUTOSAVE_KEY);
+    if(raw){
+      applyFullState(JSON.parse(raw));
+      return true;
+    }
+  }catch(err){
+    console.error('Could not read local autosave', err);
+  }
+  return false;
+}
+
 function persist(){
-  persistChain = persistChain.then(doPersist, doPersist);
+  saveAutosave(); // always — this is what makes data survive closing the app
+  persistChain = persistChain.then(doPersist, doPersist); // separately, keep a linked file (if any) in sync
   return persistChain;
 }
 async function doPersist(){
-  if(!linkedFileHandle) return; // nothing linked — data stays in memory until you Export or Link
+  if(!linkedFileHandle) return; // no linked file — you're still covered by the autosave above
   try{
     const writable = await linkedFileHandle.createWritable();
     await writable.write(JSON.stringify(getFullState(), null, 2));
@@ -122,6 +148,7 @@ async function linkExistingSaveFile(){
       linkedFileHandle = null;
       setSaveStatus(`Loaded ${handle.name}, but write access was denied — changes won't autosave.`, false, true);
     }
+    persist(); // refresh the on-device backup to match what was just opened
     render();
   }catch(err){
     if(err.name === 'AbortError') return;
@@ -152,7 +179,7 @@ async function createNewSaveFile(){
 function unlinkSaveFile(){
   linkedFileHandle = null;
   document.getElementById('unlinkSaveFileBtn').style.display = 'none';
-  setSaveStatus('Not linked — nothing is saved to disk yet.', false, false);
+  setSaveStatus('Not linked. Still auto-saved on this device — Export for a portable copy.', false, false);
   setSaveMsg('Unlinked. Export before closing this tab if you want to keep your changes.', false);
 }
 
@@ -286,8 +313,7 @@ function updateFsaUI(){
 }
 
 function loadData(){
-  // Fresh in-memory state every load — on purpose. Link a save file or
-  // Import a backup to bring your data back in.
+  loadAutosave(); // bring back whatever was here last time — this is what survives closing the app
   resetDraftMaterials();
   updateFsaUI();
   render();
@@ -995,16 +1021,19 @@ function deleteKnownCraftable(id){
 function openSidebar(){
   document.getElementById('sidebar').classList.add('open');
   document.getElementById('sidebarBackdrop').classList.add('open');
+  document.getElementById('sidebarToggleBtn').classList.add('hidden');
 }
 function closeSidebar(){
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('sidebarBackdrop').classList.remove('open');
+  document.getElementById('sidebarToggleBtn').classList.remove('hidden');
 }
 document.getElementById('sidebarToggleBtn').addEventListener('click', ()=>{
   const isOpen = document.getElementById('sidebar').classList.contains('open');
   if(isOpen) closeSidebar(); else openSidebar();
 });
 document.getElementById('sidebarBackdrop').addEventListener('click', closeSidebar);
+document.getElementById('sidebarCloseBtn').addEventListener('click', closeSidebar);
 
 document.querySelectorAll('.nav-item').forEach(btn=>{
   btn.addEventListener('click', ()=>{
