@@ -250,7 +250,9 @@ function mergeImportedState(state){
       id: 'rec_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
       name: ir.name,
       sellPrice: typeof ir.sellPrice === 'number' ? ir.sellPrice : 0,
-      materials: remapped
+      materials: remapped,
+      crafted: typeof ir.crafted === 'number' ? ir.crafted : 0,
+      sold: typeof ir.sold === 'number' ? ir.sold : 0
     });
     counts.recipesAdded++;
   });
@@ -427,6 +429,7 @@ function render(){
   } else if(currentView === 'crafting'){
     renderDraftMaterials();
     renderRecipesTable();
+    renderReadyToSell();
     renderOpportunity();
   } else {
     renderReferenceTables();
@@ -812,7 +815,7 @@ function renderRecipesTable(){
   const body = document.getElementById('recipesBody');
 
   if(recipes.length === 0){
-    body.innerHTML = '<tr class="empty-row"><td colspan="8">No craftable items yet.</td></tr>';
+    body.innerHTML = '<tr class="empty-row"><td colspan="10">No craftable items yet.</td></tr>';
     return;
   }
 
@@ -822,7 +825,8 @@ function renderRecipesTable(){
     profitUnit: recipeProfitPerUnit(r),
     max: recipeMaxCraftable(r),
     potential: recipePotentialProfit(r),
-    missing: recipeHasMissingMaterial(r)
+    missing: recipeHasMissingMaterial(r),
+    onHand: recipeOnHand(r)
   }));
 
   let bestId = null, bestPotential = -Infinity;
@@ -847,6 +851,8 @@ function renderRecipesTable(){
       <td class="${profitClass}">${x.profitUnit>=0?'+':''}${fmt(x.profitUnit)}</td>
       <td>${fmt(x.max)}</td>
       <td class="${x.potential>=0?'profit-pos':'profit-neg'}">${x.potential>=0?'+':''}${fmt(x.potential)}</td>
+      <td>${fmt(r.crafted||0)}</td>
+      <td>${fmt(x.onHand)}</td>
       <td class="al">
         <div class="row-actions" style="margin-bottom:6px;">
           <button class="icon-btn" onclick="startEditRecipe('${r.id}')" title="Edit">✎</button>
@@ -859,6 +865,10 @@ function renderRecipesTable(){
       </td>
     </tr>`;
   }).join('');
+}
+
+function recipeOnHand(recipe){
+  return (recipe.crafted || 0) - (recipe.sold || 0);
 }
 
 function doCraft(id){
@@ -876,10 +886,64 @@ function doCraft(id){
     const mat = getMaterial(line.materialId);
     if(mat) mat.used += line.qty * batches;
   });
+  recipe.crafted = (recipe.crafted || 0) + batches; // now actually on hand, ready to sell
 
   saveMaterials();
+  saveRecipes();
   render();
 }
+
+/* =========================================================
+   READY TO SELL — only items you actually have on hand right
+   now (crafted minus already sold), ranked by total value so
+   you can see at a glance what's most worth selling first.
+   ========================================================= */
+function doSell(id){
+  const recipe = recipes.find(r=>r.id===id);
+  if(!recipe) return;
+  const onHand = recipeOnHand(recipe);
+  if(onHand <= 0) return;
+
+  const input = document.getElementById('sellQty_'+id);
+  let batches = parseInt(input.value, 10);
+  if(isNaN(batches) || batches < 1) batches = 1;
+  batches = Math.min(batches, onHand); // can't sell more than you actually have
+
+  recipe.sold = (recipe.sold || 0) + batches;
+  saveRecipes();
+  render();
+}
+
+function renderReadyToSell(){
+  const body = document.getElementById('readyToSellBody');
+  const onHandItems = recipes
+    .map(r => ({ recipe:r, onHand: recipeOnHand(r) }))
+    .filter(x => x.onHand > 0)
+    .map(x => ({ ...x, totalValue: x.onHand * x.recipe.sellPrice }))
+    .sort((a,b) => b.totalValue - a.totalValue);
+
+  if(onHandItems.length === 0){
+    body.innerHTML = '<tr class="empty-row"><td colspan="5">Craft something below and it\'ll show up here, ranked by what\'s worth selling first.</td></tr>';
+    return;
+  }
+
+  body.innerHTML = onHandItems.map((x, i)=>{
+    const r = x.recipe;
+    return `<tr class="${i===0 ? 'best' : ''}">
+      <td class="al name-cell">${escapeHtml(r.name)} ${i===0 ? '<span class="badge">Sell First</span>' : ''}</td>
+      <td>${fmt(x.onHand)}</td>
+      <td>${fmt(r.sellPrice)}</td>
+      <td class="profit-pos">${fmt(x.totalValue)}</td>
+      <td class="al">
+        <div class="craft-batch-row">
+          <input type="number" min="1" max="${x.onHand}" value="${x.onHand}" id="sellQty_${r.id}">
+          <button class="craft-btn" onclick="doSell('${r.id}')">Sell</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
 
 /* =========================================================
    BEST TO SELL — grouped by material.
