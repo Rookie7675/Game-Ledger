@@ -274,15 +274,26 @@
       </div>
 
       <div class="entry-panel">
-        <div class="entry-form entry-form-reference">
+        <div class="entry-form entry-form-craft">
           <div class="field">
             <label for="refCraftName">Name</label>
             <input type="text" id="refCraftName" placeholder="e.g. undead shield" autocomplete="off">
           </div>
           <div class="field">
-            <label for="refCraftNote">Note <span style="opacity:.6">(optional)</span></label>
-            <input type="text" id="refCraftNote" placeholder="materials, sell price, etc." autocomplete="off">
+            <label for="refCraftSellPrice">Sell Price <span style="opacity:.6">(optional)</span></label>
+            <input type="text" inputmode="decimal" id="refCraftSellPrice" placeholder="0" autocomplete="off">
           </div>
+        </div>
+
+        <div class="draft-materials" id="refCraftDraftMaterials"></div>
+        <button class="add-line-btn" id="addRefCraftDraftRowBtn">+ Add material</button>
+
+        <div class="field" style="margin-bottom:12px;">
+          <label for="refCraftNote">Note <span style="opacity:.6">(optional)</span></label>
+          <input type="text" id="refCraftNote" placeholder="anything else worth remembering" autocomplete="off">
+        </div>
+
+        <div class="form-actions">
           <button class="add-btn" id="addRefCraftableBtn">+ Add</button>
         </div>
         <div class="form-msg" id="refCraftableMsg"></div>
@@ -293,13 +304,15 @@
           <thead>
             <tr>
               <th class="al">Name</th>
+              <th class="al">Materials Needed</th>
+              <th>Sell Price</th>
               <th class="al">Note</th>
               <th class="al">Source</th>
               <th class="al"></th>
             </tr>
           </thead>
           <tbody id="refCraftablesBody">
-            <tr class="empty-row"><td colspan="4">No known craftable items yet.</td></tr>
+            <tr class="empty-row"><td colspan="6">No known craftable items yet.</td></tr>
           </tbody>
         </table>
       </div>

@@ -23,6 +23,7 @@ let editingRecipeId = null;      // recipe currently loaded into the form for ed
 let editingRefMaterialId = null; // known-material row being inline-edited
 let editingRefCraftableId = null;// known-craftable row being inline-edited
 let draftMaterials = [];         // rows being built in the "New Craftable Item" form
+let refCraftDraftMaterials = []; // rows being built in the Game Data "Known Craftable" form (name-based, not tied to Inventory)
 
 /* =========================================================
    STORAGE — everything lives in memory only, plus whichever
@@ -269,7 +270,9 @@ function mergeImportedState(state){
     knownCraftables.push({
       id: 'refcraft_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
       name: ik.name, note: ik.note || '',
-      source: ik.source === 'researched' ? 'researched' : 'manual'
+      source: ik.source === 'researched' ? 'researched' : 'manual',
+      sellPrice: (typeof ik.sellPrice === 'number') ? ik.sellPrice : null,
+      materials: Array.isArray(ik.materials) ? ik.materials.map(l=>({ name:l.name, qty: typeof l.qty==='number'?l.qty:0 })) : []
     });
     counts.knownCraftAdded++;
   });
@@ -315,6 +318,7 @@ function updateFsaUI(){
 function loadData(){
   loadAutosave(); // bring back whatever was here last time — this is what survives closing the app
   resetDraftMaterials();
+  resetRefCraftDraftMaterials();
   updateFsaUI();
   render();
 }
@@ -426,6 +430,7 @@ function render(){
     renderOpportunity();
   } else {
     renderReferenceTables();
+    renderRefCraftDraftMaterials();
   }
 }
 
@@ -520,6 +525,20 @@ function renderMaterialsTable(){
       </td>
     </tr>`;
   }).join('');
+}
+
+/* Typing a name that matches an item already in your Inventory fills in
+   its Market Price automatically — only when Price is still empty, so it
+   never overwrites something you've already typed. */
+function autofillPriceFromInventory(){
+  const typed = document.getElementById('matName').value.trim();
+  if(!typed) return;
+  const priceField = document.getElementById('matPrice');
+  if(priceField.value.trim() !== '') return;
+  const match = materials.find(m => m.name.trim().toLowerCase() === typed.toLowerCase());
+  if(match){
+    priceField.value = match.price;
+  }
 }
 
 function addMaterial(){
@@ -641,6 +660,41 @@ function updateDraftRow(i, field, value){
   draftMaterials[i][field] = field === 'qty' ? parseFloat(value) : value;
 }
 
+/* Same idea as the rows above, but for the Game Data "Known Craftable"
+   form — material names are free text here, not a dropdown, since a
+   game recipe can be recorded before you've ever logged that material
+   in your Inventory. */
+function resetRefCraftDraftMaterials(){
+  refCraftDraftMaterials = [{ name:'', qty:1 }];
+}
+function renderRefCraftDraftMaterials(){
+  const wrap = document.getElementById('refCraftDraftMaterials');
+  if(!wrap) return;
+
+  wrap.innerHTML = refCraftDraftMaterials.map((line, i)=>`<div class="draft-row">
+      <input type="text" autocomplete="off" placeholder="material name" id="refCraftMatName_${i}" value="${escapeHtml(line.name)}" onchange="updateRefCraftDraftRow(${i}, 'name', this.value)">
+      <input type="text" inputmode="decimal" autocomplete="off" placeholder="qty needed" id="refCraftMatQty_${i}" value="${line.qty}" onchange="updateRefCraftDraftRow(${i}, 'qty', this.value)">
+      <button class="remove-line-btn" onclick="removeRefCraftDraftRow(${i})" title="Remove">✕</button>
+    </div>`).join('');
+
+  const fields = [];
+  refCraftDraftMaterials.forEach((line, i)=>{
+    fields.push(document.getElementById('refCraftMatName_'+i), document.getElementById('refCraftMatQty_'+i));
+  });
+  wireArrowNav(fields);
+}
+function addRefCraftDraftRow(){
+  refCraftDraftMaterials.push({ name:'', qty:1 });
+  renderRefCraftDraftMaterials();
+}
+function removeRefCraftDraftRow(i){
+  refCraftDraftMaterials.splice(i,1);
+  renderRefCraftDraftMaterials();
+}
+function updateRefCraftDraftRow(i, field, value){
+  refCraftDraftMaterials[i][field] = field === 'qty' ? parseFloat(value) : value;
+}
+
 function saveRecipe(){
   const msg = document.getElementById('recipeMsg');
   const name = document.getElementById('recName').value.trim();
@@ -651,10 +705,23 @@ function saveRecipe(){
   if(isNaN(sellPrice)){ msg.textContent = 'Sell price needs a number.'; msg.className='form-msg'; return; }
   if(cleanMaterials.length === 0){ msg.textContent = 'Add at least one material with a quantity above zero.'; msg.className='form-msg'; return; }
 
-  if(knownCraftables.length > 0 && !matchesKnown(knownCraftables, name)){
-    msg.textContent = `"${name}" isn't in your Known Craftable Items list yet. Add it in Game Data first if it's really from the game — or check your spelling.`;
-    msg.className = 'form-msg';
-    return;
+  // If this name isn't in Game Data yet, register it there automatically
+  // instead of refusing to save. Materials get translated back to plain
+  // names, since Game Data stays independent of what's currently in stock.
+  let autoRegistered = false;
+  if(!matchesKnown(knownCraftables, name)){
+    const materialsForGameData = cleanMaterials.map(l=>{
+      const mat = getMaterial(l.materialId);
+      return { name: mat ? mat.name : 'unknown material', qty: l.qty };
+    });
+    knownCraftables.push({
+      id:'refcraft_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+      name, note:'', source:'manual',
+      sellPrice: isNaN(sellPrice) ? null : sellPrice,
+      materials: materialsForGameData
+    });
+    saveKnownCraftables();
+    autoRegistered = true;
   }
 
   if(editingRecipeId){
@@ -662,15 +729,51 @@ function saveRecipe(){
     recipe.name = name;
     recipe.sellPrice = sellPrice;
     recipe.materials = cleanMaterials;
-    msg.textContent = 'Recipe updated.'; msg.className='form-msg ok';
+    msg.textContent = 'Recipe updated.' + (autoRegistered ? ' Also added to Game Data.' : '');
+    msg.className='form-msg ok';
   } else {
     recipes.push({ id:'rec_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), name, sellPrice, materials: cleanMaterials });
-    msg.textContent = 'Recipe saved.'; msg.className='form-msg ok';
+    msg.textContent = 'Recipe saved.' + (autoRegistered ? ' Also added to Game Data.' : '');
+    msg.className='form-msg ok';
   }
 
   saveRecipes();
   cancelEditRecipe(); // resets the form back to "new" state
   render();
+}
+
+/* The reverse direction: typing a Craft Name that already matches a Known
+   Craftable pulls its sell price and materials in automatically. Materials
+   are matched to your current Inventory by name — anything not in your
+   Inventory yet is listed instead of silently dropped. Only runs for a
+   brand-new entry, so it never overwrites an in-progress edit. */
+function autofillFromKnownCraftable(){
+  if(editingRecipeId) return;
+  const typed = document.getElementById('recName').value.trim();
+  if(!typed) return;
+  const match = knownCraftables.find(k => k.name.trim().toLowerCase() === typed.toLowerCase());
+  if(!match) return;
+
+  if(match.sellPrice != null){
+    document.getElementById('recSellPrice').value = match.sellPrice;
+  }
+
+  if(Array.isArray(match.materials) && match.materials.length){
+    const mapped = [];
+    const missing = [];
+    match.materials.forEach(line=>{
+      const mat = materials.find(m => m.name.trim().toLowerCase() === (line.name||'').trim().toLowerCase());
+      if(mat){ mapped.push({ materialId: mat.id, qty: line.qty }); }
+      else{ missing.push(line.name); }
+    });
+    if(mapped.length){
+      draftMaterials = mapped;
+      renderDraftMaterials();
+    }
+    const msg = document.getElementById('recipeMsg');
+    msg.textContent = 'Auto-filled from Game Data.' + (missing.length ? ` Add "${missing.join('", "')}" to Inventory to include ${missing.length>1?'them':'it'} here.` : '');
+    msg.className = 'form-msg ok';
+  }
 }
 
 function startEditRecipe(id){
@@ -938,14 +1041,20 @@ function deleteKnownMaterial(id){
 function renderKnownCraftablesTable(){
   const body = document.getElementById('refCraftablesBody');
   if(knownCraftables.length === 0){
-    body.innerHTML = '<tr class="empty-row"><td colspan="4">No known craftable items yet.</td></tr>';
+    body.innerHTML = '<tr class="empty-row"><td colspan="6">No known craftable items yet.</td></tr>';
     return;
   }
   body.innerHTML = knownCraftables.map(k=>{
+    const matList = (Array.isArray(k.materials) && k.materials.length)
+      ? k.materials.map(l => `${escapeHtml(l.name)} x${fmt(l.qty)}`).join(', ')
+      : '—';
+
     if(editingRefCraftableId === k.id){
       return `<tr data-ref-craft-id="${k.id}">
         <td class="al"><input class="cell-input" style="width:150px;text-align:left;" type="text" id="editRefCraftName_${k.id}" value="${escapeHtml(k.name)}"></td>
-        <td class="al"><input class="cell-input" style="width:240px;text-align:left;" type="text" id="editRefCraftNote_${k.id}" value="${escapeHtml(k.note||'')}"></td>
+        <td class="al mat-list">${matList}</td>
+        <td><input class="cell-input" type="text" inputmode="decimal" id="editRefCraftSellPrice_${k.id}" value="${k.sellPrice != null ? k.sellPrice : ''}"></td>
+        <td class="al"><input class="cell-input" style="width:200px;text-align:left;" type="text" id="editRefCraftNote_${k.id}" value="${escapeHtml(k.note||'')}"></td>
         <td class="al"><span class="source-tag source-${k.source}">${k.source}</span></td>
         <td class="al row-actions">
           <button class="icon-btn" onclick="saveEditRefCraftable('${k.id}')" title="Save">💾</button>
@@ -955,6 +1064,8 @@ function renderKnownCraftablesTable(){
     }
     return `<tr data-ref-craft-id="${k.id}">
       <td class="al name-cell">${escapeHtml(k.name)}</td>
+      <td class="al mat-list">${matList}</td>
+      <td>${k.sellPrice != null ? fmt(k.sellPrice) : '—'}</td>
       <td class="al">${escapeHtml(k.note || '—')}</td>
       <td class="al"><span class="source-tag source-${k.source}">${k.source}</span></td>
       <td class="al row-actions">
@@ -969,6 +1080,11 @@ function addKnownCraftable(){
   const msg = document.getElementById('refCraftableMsg');
   const name = document.getElementById('refCraftName').value.trim();
   const note = document.getElementById('refCraftNote').value.trim();
+  const sellPriceRaw = document.getElementById('refCraftSellPrice').value.trim();
+  const sellPrice = sellPriceRaw === '' ? null : parseFloat(sellPriceRaw);
+  const cleanMaterials = refCraftDraftMaterials.filter(l => l.name && l.name.trim() && !isNaN(l.qty) && l.qty > 0)
+    .map(l => ({ name: l.name.trim(), qty: l.qty }));
+
   if(!name){ msg.textContent = 'Give it a name.'; msg.className='form-msg'; return; }
 
   const existing = knownCraftables.find(k => k.name.trim().toLowerCase() === name.toLowerCase());
@@ -979,12 +1095,20 @@ function addKnownCraftable(){
     return;
   }
 
-  knownCraftables.push({ id:'refcraft_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), name, note, source:'manual' });
+  knownCraftables.push({
+    id:'refcraft_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+    name, note, source:'manual',
+    sellPrice: (sellPrice !== null && !isNaN(sellPrice)) ? sellPrice : null,
+    materials: cleanMaterials
+  });
   saveKnownCraftables();
   msg.textContent = ''; msg.className = 'form-msg';
   render();
   document.getElementById('refCraftName').value = '';
   document.getElementById('refCraftNote').value = '';
+  document.getElementById('refCraftSellPrice').value = '';
+  resetRefCraftDraftMaterials();
+  renderRefCraftDraftMaterials();
   document.getElementById('refCraftName').focus();
 }
 
@@ -1002,9 +1126,12 @@ function saveEditRefCraftable(id){
   if(!k) return;
   const newName = document.getElementById('editRefCraftName_'+id).value.trim();
   const newNote = document.getElementById('editRefCraftNote_'+id).value.trim();
+  const rawPrice = document.getElementById('editRefCraftSellPrice_'+id).value.trim();
   if(!newName) return;
   k.name = newName;
   k.note = newNote;
+  k.sellPrice = rawPrice === '' ? null : parseFloat(rawPrice);
+  if(isNaN(k.sellPrice)) k.sellPrice = null;
   editingRefCraftableId = null;
   saveKnownCraftables();
   render();
@@ -1044,6 +1171,7 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
 });
 
 document.getElementById('addMaterialBtn').addEventListener('click', addMaterial);
+document.getElementById('matName').addEventListener('input', autofillPriceFromInventory);
 [document.getElementById('matName'), document.getElementById('matAmount'), document.getElementById('matPrice')].forEach(el=>{
   el.addEventListener('keydown', e=>{ if(e.key==='Enter') addMaterial(); });
 });
@@ -1051,6 +1179,7 @@ document.getElementById('addMaterialBtn').addEventListener('click', addMaterial)
 document.getElementById('addDraftRowBtn').addEventListener('click', addDraftRow);
 document.getElementById('saveRecipeBtn').addEventListener('click', saveRecipe);
 document.getElementById('cancelRecipeBtn').addEventListener('click', cancelEditRecipe);
+document.getElementById('recName').addEventListener('input', autofillFromKnownCraftable);
 
 document.getElementById('addRefMaterialBtn').addEventListener('click', addKnownMaterial);
 [document.getElementById('refMatName'), document.getElementById('refMatNote')].forEach(el=>{
@@ -1058,6 +1187,7 @@ document.getElementById('addRefMaterialBtn').addEventListener('click', addKnownM
 });
 
 document.getElementById('addRefCraftableBtn').addEventListener('click', addKnownCraftable);
+document.getElementById('addRefCraftDraftRowBtn').addEventListener('click', addRefCraftDraftRow);
 [document.getElementById('refCraftName'), document.getElementById('refCraftNote')].forEach(el=>{
   el.addEventListener('keydown', e=>{ if(e.key==='Enter') addKnownCraftable(); });
 });
