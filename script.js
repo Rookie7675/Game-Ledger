@@ -561,9 +561,25 @@ function addMaterial(){
 
   const existing = materials.find(m => m.name.trim().toLowerCase() === name.toLowerCase());
   if(existing){
-    msg.textContent = `"${existing.name}" is already in your inventory — edit that row instead of adding it again.`;
-    msg.className = 'form-msg';
+    const amountChanged = existing.amount !== amount;
+    const priceChanged = existing.price !== price;
+    existing.amount = amount;
+    existing.price = price;
+    saveMaterials();
+
+    if(amountChanged || priceChanged){
+      msg.textContent = `Updated "${existing.name}" — ${amountChanged ? `amount is now ${fmt(amount)}` : ''}${amountChanged && priceChanged ? ', ' : ''}${priceChanged ? `price is now ${fmt(price)}` : ''}.`;
+    } else {
+      msg.textContent = `"${existing.name}" already matches those numbers — nothing changed.`;
+    }
+    msg.className = 'form-msg ok';
+    render();
     flashExistingMaterial(existing.id);
+
+    document.getElementById('matName').value = '';
+    document.getElementById('matAmount').value = '';
+    document.getElementById('matPrice').value = '';
+    document.getElementById('matName').focus();
     return;
   }
 
