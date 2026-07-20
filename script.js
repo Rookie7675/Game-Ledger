@@ -16,14 +16,50 @@ let materials = [];
 let recipes = [];
 let knownMaterials = [];
 let knownCraftables = [];
+let activityLog = []; // {id, timestamp, message} — most recent first, capped at MAX_LOG_ENTRIES
+const MAX_LOG_ENTRIES = 200;
 
-let currentView = 'inventory';   // 'inventory' | 'crafting' | 'reference'
+let currentView = 'inventory';   // 'inventory' | 'crafting' | 'reference' | 'activity'
 let editingMaterialId = null;    // row currently being inline-edited
 let editingRecipeId = null;      // recipe currently loaded into the form for editing
 let editingRefMaterialId = null; // known-material row being inline-edited
 let editingRefCraftableId = null;// known-craftable row being inline-edited
 let draftMaterials = [];         // rows being built in the "New Craftable Item" form
 let refCraftDraftMaterials = []; // rows being built in the Game Data "Known Craftable" form (name-based, not tied to Inventory)
+
+let materialSearch = '';
+let recipeSearch = '';
+let tableSort = {
+  materials:     { key: 'name', dir: 1 },
+  recipes:       { key: 'name', dir: 1 },
+  refMaterials:  { key: 'name', dir: 1 },
+  refCraftables: { key: 'name', dir: 1 }
+};
+function toggleSort(tableName, key){
+  const s = tableSort[tableName];
+  if(s.key === key){ s.dir *= -1; } else { s.key = key; s.dir = 1; }
+}
+function applySortClasses(theadEl, tableName){
+  const s = tableSort[tableName];
+  theadEl.querySelectorAll('th[data-key]').forEach(th=>{
+    const active = th.dataset.key === s.key;
+    th.classList.toggle('sorted', active);
+    th.classList.toggle('sorted-asc', active && s.dir === 1);
+  });
+}
+function sortRows(rows, tableName, getters){
+  const s = tableSort[tableName];
+  const getVal = getters[s.key];
+  if(!getVal) return rows;
+  return [...rows].sort((a,b)=>{
+    let av = getVal(a), bv = getVal(b);
+    if(typeof av === 'string') av = av.toLowerCase();
+    if(typeof bv === 'string') bv = bv.toLowerCase();
+    if(av < bv) return -1 * s.dir;
+    if(av > bv) return 1 * s.dir;
+    return 0;
+  });
+}
 
 /* =========================================================
    STORAGE — everything lives in memory only, plus whichever
@@ -49,7 +85,7 @@ function getFullState(){
   return {
     schemaVersion: 1,
     savedAt: new Date().toISOString(),
-    materials, recipes, knownMaterials, knownCraftables
+    materials, recipes, knownMaterials, knownCraftables, activityLog
   };
 }
 function applyFullState(state){
@@ -57,12 +93,23 @@ function applyFullState(state){
   recipes = Array.isArray(state.recipes) ? state.recipes : [];
   knownMaterials = Array.isArray(state.knownMaterials) ? state.knownMaterials : [];
   knownCraftables = Array.isArray(state.knownCraftables) ? state.knownCraftables : [];
+  activityLog = Array.isArray(state.activityLog) ? state.activityLog : [];
   editingMaterialId = null;
   editingRecipeId = null;
   editingRefMaterialId = null;
   editingRefCraftableId = null;
   resetDraftMaterials();
 }
+
+function logActivity(message){
+  activityLog.unshift({
+    id: 'log_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+    timestamp: new Date().toISOString(),
+    message
+  });
+  if(activityLog.length > MAX_LOG_ENTRIES) activityLog.length = MAX_LOG_ENTRIES;
+}
+function saveActivityLog(){ persist(); }
 
 function setSaveStatus(text, isLinked, isWarn){
   const el = document.getElementById('saveStatus');
@@ -199,6 +246,28 @@ function exportBackup(){
   setSaveMsg('Backup downloaded to your device.', false);
 }
 
+/* Shareable subset — just the two Game Data lists, nothing personal.
+   The existing Import Backup button already handles a file like this
+   correctly, since it merges whatever fields are present. */
+function exportGameData(){
+  const data = JSON.stringify({
+    schemaVersion: 1,
+    savedAt: new Date().toISOString(),
+    knownMaterials, knownCraftables
+  }, null, 2);
+  const blob = new Blob([data], { type:'application/json' });
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `guild-ledger-gamedata-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setSaveMsg('Game Data exported — safe to share with other players.', false);
+}
+
 /* Merges an imported backup INTO the current ledger instead of replacing
    it: anything whose name doesn't already exist gets added; anything
    whose name matches something you already have is left alone so your
@@ -278,6 +347,19 @@ function mergeImportedState(state){
     });
     counts.knownCraftAdded++;
   });
+
+  // Activity log entries merge by id (so re-importing the same backup
+  // twice doesn't duplicate history), then get re-sorted newest-first.
+  const incomingLog = Array.isArray(state.activityLog) ? state.activityLog : [];
+  const existingLogIds = new Set(activityLog.map(e=>e.id));
+  incomingLog.forEach(e=>{
+    if(e && e.id && !existingLogIds.has(e.id)){
+      activityLog.push(e);
+      existingLogIds.add(e.id);
+    }
+  });
+  activityLog.sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
+  if(activityLog.length > MAX_LOG_ENTRIES) activityLog.length = MAX_LOG_ENTRIES;
 
   editingMaterialId = null;
   editingRecipeId = null;
@@ -431,9 +513,11 @@ function render(){
     renderRecipesTable();
     renderReadyToSell();
     renderOpportunity();
-  } else {
+  } else if(currentView === 'reference'){
     renderReferenceTables();
     renderRefCraftDraftMaterials();
+  } else {
+    renderActivityLog();
   }
 }
 
@@ -455,14 +539,19 @@ function renderNav(){
   document.getElementById('navReferenceStats').innerHTML =
     `${knownMaterials.length} materials · ${knownCraftables.length} craftables`;
 
+  document.getElementById('navActivityStats').innerHTML =
+    `${activityLog.length} entr${activityLog.length===1?'y':'ies'}`;
+
   document.getElementById('view-inventory').classList.toggle('active', currentView==='inventory');
   document.getElementById('view-crafting').classList.toggle('active', currentView==='crafting');
   document.getElementById('view-reference').classList.toggle('active', currentView==='reference');
+  document.getElementById('view-activity').classList.toggle('active', currentView==='activity');
 
   const titles = {
     inventory: ['Storeroom Inventory', "Everything the guild has on hand, and what's already spoken for."],
     crafting: ['Crafting Bench', "What you can build from what's left in storage — and which one pays best."],
-    reference: ['Game Data Library', "The confirmed names that keep your Inventory and Crafting honest to the real game."]
+    reference: ['Game Data Library', "The confirmed names that keep your Inventory and Crafting honest to the real game."],
+    activity: ['Activity Log', "A running record of what's actually happened in this ledger."]
   };
   document.getElementById('pageTitle').textContent = titles[currentView][0];
   document.getElementById('pageSub').textContent = titles[currentView][1];
@@ -488,13 +577,27 @@ function renderHero(){
    ========================================================= */
 function renderMaterialsTable(){
   const body = document.getElementById('materialsBody');
+  const thead = document.querySelector('#materialsTable thead');
+  applySortClasses(thead, 'materials');
 
-  if(materials.length === 0){
-    body.innerHTML = '<tr class="empty-row"><td colspan="7">No materials logged yet.</td></tr>';
+  const q = materialSearch.trim().toLowerCase();
+  let list = q ? materials.filter(m => m.name.toLowerCase().includes(q)) : materials;
+
+  if(list.length === 0){
+    body.innerHTML = `<tr class="empty-row"><td colspan="7">${materials.length===0 ? 'No materials logged yet.' : 'No materials match your search.'}</td></tr>`;
     return;
   }
 
-  body.innerHTML = materials.map(mat=>{
+  list = sortRows(list, 'materials', {
+    name: m => m.name,
+    amount: m => m.amount,
+    price: m => m.price,
+    used: m => m.used,
+    remaining: m => remaining(m),
+    value: m => remainingValue(m)
+  });
+
+  body.innerHTML = list.map(mat=>{
     const rem = remaining(mat);
     const val = remainingValue(mat);
 
@@ -569,6 +672,7 @@ function addMaterial(){
 
     if(amountChanged || priceChanged){
       msg.textContent = `Updated "${existing.name}" — ${amountChanged ? `amount is now ${fmt(amount)}` : ''}${amountChanged && priceChanged ? ', ' : ''}${priceChanged ? `price is now ${fmt(price)}` : ''}.`;
+      logActivity(`Updated "${existing.name}" — amount ${fmt(amount)}, price ${fmt(price)}`);
     } else {
       msg.textContent = `"${existing.name}" already matches those numbers — nothing changed.`;
     }
@@ -585,6 +689,7 @@ function addMaterial(){
 
   materials.push({ id: 'mat_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), name, amount, price, used:0 });
   saveMaterials();
+  logActivity(`Added material "${name}" — ${fmt(amount)} @ ${fmt(price)}`);
   msg.textContent = ''; msg.className='form-msg';
   render();
 
@@ -592,6 +697,73 @@ function addMaterial(){
   document.getElementById('matAmount').value = '';
   document.getElementById('matPrice').value = '';
   document.getElementById('matName').focus();
+}
+
+/* Parses "name, amount, price" — one per line — and adds or updates each,
+   using the exact same rules as the single-item Add Material form: the
+   Known Materials gate still applies, and a name that already exists gets
+   its amount/price replaced rather than skipped. */
+function bulkAddMaterials(){
+  const msg = document.getElementById('bulkPasteMsg');
+  const raw = document.getElementById('bulkPasteInput').value;
+  const lines = raw.split('\n').map(l=>l.trim()).filter(l=>l.length);
+
+  if(lines.length === 0){
+    msg.textContent = 'Paste at least one line first.';
+    msg.className = 'form-msg';
+    return;
+  }
+
+  let added = 0, updated = 0, skipped = 0;
+  const skipReasons = [];
+
+  lines.forEach(line=>{
+    const parts = line.split(',').map(p=>p.trim());
+    if(parts.length !== 3){
+      skipped++; skipReasons.push(`"${line}" — needs exactly name, amount, price`);
+      return;
+    }
+    const [name, amountStr, priceStr] = parts;
+    const amount = parseFloat(amountStr);
+    const price = parseFloat(priceStr);
+
+    if(!name || isNaN(amount) || isNaN(price)){
+      skipped++; skipReasons.push(`"${line}" — amount/price aren't valid numbers`);
+      return;
+    }
+    if(knownMaterials.length > 0 && !matchesKnown(knownMaterials, name)){
+      skipped++; skipReasons.push(`"${name}" — not in Known Materials`);
+      return;
+    }
+
+    const existing = materials.find(m => m.name.trim().toLowerCase() === name.toLowerCase());
+    if(existing){
+      existing.amount = amount;
+      existing.price = price;
+      updated++;
+    } else {
+      materials.push({ id: 'mat_'+Date.now()+'_'+Math.random().toString(36).slice(2,7)+'_'+added, name, amount, price, used:0 });
+      added++;
+    }
+  });
+
+  if(added || updated) saveMaterials();
+  render();
+
+  if(added || updated){
+    logActivity(`Bulk pasted materials — ${added} added, ${updated} updated${skipped?`, ${skipped} skipped`:''}`);
+  }
+
+  const parts = [];
+  if(added) parts.push(`${added} added`);
+  if(updated) parts.push(`${updated} updated`);
+  if(skipped) parts.push(`${skipped} skipped`);
+  msg.textContent = parts.join(', ') + '.' + (skipReasons.length ? ' ' + skipReasons.slice(0,3).join('; ') + (skipReasons.length>3 ? `; +${skipReasons.length-3} more` : '') : '');
+  msg.className = (added||updated) ? 'form-msg ok' : 'form-msg';
+
+  if(added || updated){
+    document.getElementById('bulkPasteInput').value = '';
+  }
 }
 
 function flashExistingMaterial(id){
@@ -625,13 +797,76 @@ function saveEditMaterial(id){
   saveMaterials();
   render(); // recipes' max-craftable / cost depend on materials, so refresh everything
 }
+/* =========================================================
+   UNDO — a brief window to reverse the last delete, across
+   Materials, Recipes, Known Materials, and Known Craftables.
+   ========================================================= */
+let lastDeleted = null;
+let undoTimeout = null;
+
+function showUndoToast(type, message, data){
+  lastDeleted = { type, data };
+  clearTimeout(undoTimeout);
+  document.getElementById('undoToastText').textContent = message;
+  document.getElementById('undoToast').style.display = 'flex';
+  undoTimeout = setTimeout(hideUndoToast, 6000);
+}
+function hideUndoToast(){
+  document.getElementById('undoToast').style.display = 'none';
+  lastDeleted = null;
+  clearTimeout(undoTimeout);
+}
+function performUndo(){
+  if(!lastDeleted) return;
+  const { type, data } = lastDeleted;
+  let restoredName = '';
+
+  if(type === 'material'){
+    materials.push(data.material);
+    data.affectedRecipes.forEach(a=>{
+      const r = recipes.find(x=>x.id===a.recipeId);
+      if(r) r.materials.push(a.line);
+    });
+    saveMaterials();
+    saveRecipes();
+    restoredName = data.material.name;
+  } else if(type === 'recipe'){
+    recipes.push(data.recipe);
+    saveRecipes();
+    restoredName = data.recipe.name;
+  } else if(type === 'knownMaterial'){
+    knownMaterials.push(data.item);
+    saveKnownMaterials();
+    restoredName = data.item.name;
+  } else if(type === 'knownCraftable'){
+    knownCraftables.push(data.item);
+    saveKnownCraftables();
+    restoredName = data.item.name;
+  }
+
+  logActivity(`Undid delete — restored "${restoredName}"`);
+  hideUndoToast();
+  render();
+}
+
 function deleteMaterial(id){
+  const mat = materials.find(m => m.id === id);
+  if(!mat) return;
+
+  // snapshot which recipes reference this material so undo can restore them too
+  const affectedRecipes = [];
+  recipes.forEach(r=>{
+    const line = r.materials.find(l => l.materialId === id);
+    if(line) affectedRecipes.push({ recipeId: r.id, line: {...line} });
+  });
+
   materials = materials.filter(m => m.id !== id);
-  // clean up any recipes that referenced this material
   recipes.forEach(r=>{ r.materials = r.materials.filter(line => line.materialId !== id); });
   saveMaterials();
   saveRecipes();
   render();
+  logActivity(`Deleted material "${mat.name}"`);
+  showUndoToast('material', `Deleted "${mat.name}"`, { material: mat, affectedRecipes });
 }
 
 /* =========================================================
@@ -741,6 +976,7 @@ function saveRecipe(){
     });
     saveKnownCraftables();
     autoRegistered = true;
+    logActivity(`"${name}" wasn't in Game Data — added it automatically`);
   }
 
   if(editingRecipeId){
@@ -750,9 +986,11 @@ function saveRecipe(){
     recipe.materials = cleanMaterials;
     msg.textContent = 'Recipe updated.' + (autoRegistered ? ' Also added to Game Data.' : '');
     msg.className='form-msg ok';
+    logActivity(`Updated recipe "${name}"`);
   } else {
     recipes.push({ id:'rec_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), name, sellPrice, materials: cleanMaterials });
     msg.textContent = 'Recipe saved.' + (autoRegistered ? ' Also added to Game Data.' : '');
+    logActivity(`Saved new recipe "${name}"`);
     msg.className='form-msg ok';
   }
 
@@ -819,9 +1057,13 @@ function cancelEditRecipe(){
   renderDraftMaterials();
 }
 function deleteRecipe(id){
+  const recipe = recipes.find(r=>r.id === id);
+  if(!recipe) return;
   recipes = recipes.filter(r=>r.id !== id);
   saveRecipes();
   render();
+  logActivity(`Deleted recipe "${recipe.name}"`);
+  showUndoToast('recipe', `Deleted "${recipe.name}"`, { recipe });
 }
 
 /* =========================================================
@@ -829,6 +1071,8 @@ function deleteRecipe(id){
    ========================================================= */
 function renderRecipesTable(){
   const body = document.getElementById('recipesBody');
+  const thead = document.querySelector('#recipesTable thead');
+  applySortClasses(thead, 'recipes');
 
   if(recipes.length === 0){
     body.innerHTML = '<tr class="empty-row"><td colspan="10">No craftable items yet.</td></tr>';
@@ -848,7 +1092,26 @@ function renderRecipesTable(){
   let bestId = null, bestPotential = -Infinity;
   withCalc.forEach(x=>{ if(x.potential > bestPotential){ bestPotential = x.potential; bestId = x.recipe.id; } });
 
-  body.innerHTML = withCalc.map(x=>{
+  const q = recipeSearch.trim().toLowerCase();
+  let visible = q ? withCalc.filter(x => x.recipe.name.toLowerCase().includes(q)) : withCalc;
+
+  if(visible.length === 0){
+    body.innerHTML = '<tr class="empty-row"><td colspan="10">No craftable items match your search.</td></tr>';
+    return;
+  }
+
+  visible = sortRows(visible, 'recipes', {
+    name: x => x.recipe.name,
+    cost: x => x.cost,
+    sellPrice: x => x.recipe.sellPrice,
+    profitUnit: x => x.profitUnit,
+    max: x => x.max,
+    potential: x => x.potential,
+    crafted: x => x.recipe.crafted||0,
+    onHand: x => x.onHand
+  });
+
+  body.innerHTML = visible.map(x=>{
     const r = x.recipe;
     const matList = r.materials.map(line=>{
       const mat = getMaterial(line.materialId);
@@ -906,6 +1169,7 @@ function doCraft(id){
 
   saveMaterials();
   saveRecipes();
+  logActivity(`Crafted ${fmt(batches)}x "${recipe.name}"`);
   render();
 }
 
@@ -927,7 +1191,59 @@ function doSell(id){
 
   recipe.sold = (recipe.sold || 0) + batches;
   saveRecipes();
+  logActivity(`Sold ${fmt(batches)}x "${recipe.name}" for ${fmt(batches * recipe.sellPrice)}`);
   render();
+}
+
+/* Bulk actions — craft every recipe up to its own max at once, or sell
+   everything currently on hand at once, instead of going row by row. */
+function craftAllMax(){
+  let craftedCount = 0;
+  recipes.forEach(recipe=>{
+    const max = recipeMaxCraftable(recipe);
+    if(max <= 0) return;
+    recipe.materials.forEach(line=>{
+      const mat = getMaterial(line.materialId);
+      if(mat) mat.used += line.qty * max;
+    });
+    recipe.crafted = (recipe.crafted || 0) + max;
+    craftedCount++;
+  });
+  const msg = document.getElementById('recipeMsg');
+  if(craftedCount === 0){
+    msg.textContent = "Nothing to craft — you're out of materials for every recipe.";
+    msg.className = 'form-msg';
+    return;
+  }
+  saveMaterials();
+  saveRecipes();
+  render();
+  msg.textContent = `Crafted the max on ${craftedCount} recipe${craftedCount===1?'':'s'}.`;
+  msg.className = 'form-msg ok';
+  logActivity(`Craft All Max — crafted the max on ${craftedCount} recipe${craftedCount===1?'':'s'}`);
+}
+
+function sellAllReady(){
+  let soldCount = 0;
+  let revenue = 0;
+  recipes.forEach(recipe=>{
+    const onHand = recipeOnHand(recipe);
+    if(onHand <= 0) return;
+    recipe.sold = (recipe.sold || 0) + onHand;
+    revenue += onHand * recipe.sellPrice;
+    soldCount++;
+  });
+  const msg = document.getElementById('recipeMsg');
+  if(soldCount === 0){
+    msg.textContent = "Nothing on hand to sell yet — craft something first.";
+    msg.className = 'form-msg';
+    return;
+  }
+  saveRecipes();
+  render();
+  msg.textContent = `Sold everything on hand across ${soldCount} item${soldCount===1?'':'s'}.`;
+  msg.className = 'form-msg ok';
+  logActivity(`Sell All Ready — sold ${soldCount} item${soldCount===1?'':'s'} for ${fmt(revenue)}`);
 }
 
 function renderReadyToSell(){
@@ -1040,11 +1356,19 @@ function flashRow(selector){
 
 function renderKnownMaterialsTable(){
   const body = document.getElementById('refMaterialsBody');
+  const thead = document.querySelector('#refMaterialsTable thead');
+  if(thead) applySortClasses(thead, 'refMaterials');
+
   if(knownMaterials.length === 0){
     body.innerHTML = '<tr class="empty-row"><td colspan="4">No known materials yet.</td></tr>';
     return;
   }
-  body.innerHTML = knownMaterials.map(k=>{
+  const list = sortRows(knownMaterials, 'refMaterials', {
+    name: k => k.name,
+    note: k => k.note || '',
+    source: k => k.source || ''
+  });
+  body.innerHTML = list.map(k=>{
     if(editingRefMaterialId === k.id){
       return `<tr data-ref-mat-id="${k.id}">
         <td class="al"><input class="cell-input" style="width:150px;text-align:left;" type="text" id="editRefMatName_${k.id}" value="${escapeHtml(k.name)}"></td>
@@ -1084,6 +1408,7 @@ function addKnownMaterial(){
 
   knownMaterials.push({ id:'refmat_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), name, note, source:'manual' });
   saveKnownMaterials();
+  logActivity(`Added "${name}" to Known Materials`);
   msg.textContent = ''; msg.className = 'form-msg';
   render();
   document.getElementById('refMatName').value = '';
@@ -1113,18 +1438,31 @@ function saveEditRefMaterial(id){
   render();
 }
 function deleteKnownMaterial(id){
+  const item = knownMaterials.find(k=>k.id === id);
+  if(!item) return;
   knownMaterials = knownMaterials.filter(k=>k.id !== id);
   saveKnownMaterials();
   render();
+  logActivity(`Deleted "${item.name}" from Known Materials`);
+  showUndoToast('knownMaterial', `Deleted "${item.name}" from Known Materials`, { item });
 }
 
 function renderKnownCraftablesTable(){
   const body = document.getElementById('refCraftablesBody');
+  const thead = document.querySelector('#refCraftablesTable thead');
+  if(thead) applySortClasses(thead, 'refCraftables');
+
   if(knownCraftables.length === 0){
     body.innerHTML = '<tr class="empty-row"><td colspan="6">No known craftable items yet.</td></tr>';
     return;
   }
-  body.innerHTML = knownCraftables.map(k=>{
+  const list = sortRows(knownCraftables, 'refCraftables', {
+    name: k => k.name,
+    sellPrice: k => (k.sellPrice != null ? k.sellPrice : -Infinity),
+    note: k => k.note || '',
+    source: k => k.source || ''
+  });
+  body.innerHTML = list.map(k=>{
     const matList = (Array.isArray(k.materials) && k.materials.length)
       ? k.materials.map(l => `${escapeHtml(l.name)} x${fmt(l.qty)}`).join(', ')
       : '—';
@@ -1182,6 +1520,7 @@ function addKnownCraftable(){
     materials: cleanMaterials
   });
   saveKnownCraftables();
+  logActivity(`Added "${name}" to Known Craftable Items`);
   msg.textContent = ''; msg.className = 'form-msg';
   render();
   document.getElementById('refCraftName').value = '';
@@ -1217,14 +1556,77 @@ function saveEditRefCraftable(id){
   render();
 }
 function deleteKnownCraftable(id){
+  const item = knownCraftables.find(k=>k.id === id);
+  if(!item) return;
   knownCraftables = knownCraftables.filter(k=>k.id !== id);
   saveKnownCraftables();
+  render();
+  logActivity(`Deleted "${item.name}" from Known Craftable Items`);
+  showUndoToast('knownCraftable', `Deleted "${item.name}" from Known Craftable Items`, { item });
+}
+
+/* =========================================================
+   ACTIVITY LOG
+   ========================================================= */
+function formatLogTime(iso){
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+function renderActivityLog(){
+  const body = document.getElementById('activityLogBody');
+  if(activityLog.length === 0){
+    body.innerHTML = '<tr class="empty-row"><td colspan="2">Nothing logged yet — actions you take will show up here.</td></tr>';
+    return;
+  }
+  body.innerHTML = activityLog.map(entry=>`<tr>
+    <td class="al" style="color:var(--text-dim);">${formatLogTime(entry.timestamp)}</td>
+    <td class="al">${escapeHtml(entry.message)}</td>
+  </tr>`).join('');
+}
+function clearActivityLog(){
+  activityLog = [];
+  saveActivityLog();
   render();
 }
 
 /* =========================================================
    EVENT WIRING
    ========================================================= */
+[
+  ['#materialsTable', 'materials', renderMaterialsTable],
+  ['#recipesTable', 'recipes', renderRecipesTable],
+  ['#refMaterialsTable', 'refMaterials', renderKnownMaterialsTable],
+  ['#refCraftablesTable', 'refCraftables', renderKnownCraftablesTable]
+].forEach(([tableSelector, tableName, renderFn])=>{
+  document.querySelectorAll(`${tableSelector} thead th[data-key]`).forEach(th=>{
+    th.addEventListener('click', ()=>{
+      toggleSort(tableName, th.dataset.key);
+      renderFn();
+    });
+  });
+});
+
+document.getElementById('materialSearch').addEventListener('input', (e)=>{
+  materialSearch = e.target.value;
+  renderMaterialsTable();
+});
+document.getElementById('recipeSearch').addEventListener('input', (e)=>{
+  recipeSearch = e.target.value;
+  renderRecipesTable();
+});
+document.getElementById('craftAllMaxBtn').addEventListener('click', craftAllMax);
+document.getElementById('sellAllReadyBtn').addEventListener('click', sellAllReady);
+document.getElementById('undoBtn').addEventListener('click', performUndo);
+
+document.getElementById('toggleBulkPasteBtn').addEventListener('click', ()=>{
+  const area = document.getElementById('bulkPasteArea');
+  const isOpen = area.style.display !== 'none';
+  area.style.display = isOpen ? 'none' : 'block';
+  if(!isOpen) document.getElementById('bulkPasteInput').focus();
+});
+document.getElementById('bulkPasteAddBtn').addEventListener('click', bulkAddMaterials);
+document.getElementById('clearActivityLogBtn').addEventListener('click', clearActivityLog);
+
 function openSidebar(){
   document.getElementById('sidebar').classList.add('open');
   document.getElementById('sidebarBackdrop').classList.add('open');
@@ -1295,6 +1697,7 @@ document.getElementById('openSaveFileBtn').addEventListener('click', linkExistin
 document.getElementById('newSaveFileBtn').addEventListener('click', createNewSaveFile);
 document.getElementById('unlinkSaveFileBtn').addEventListener('click', unlinkSaveFile);
 document.getElementById('exportBtn').addEventListener('click', exportBackup);
+document.getElementById('exportGameDataBtn').addEventListener('click', exportGameData);
 document.getElementById('importBtn').addEventListener('click', ()=>{
   document.getElementById('importFileInput').click();
 });

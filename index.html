@@ -15,6 +15,10 @@
 <body>
 <button class="sidebar-toggle-btn" id="sidebarToggleBtn" aria-label="Open menu">☰</button>
 <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+<div class="undo-toast" id="undoToast" style="display:none;">
+  <span id="undoToastText"></span>
+  <button id="undoBtn">Undo</button>
+</div>
 <div class="page">
 
   <!-- ================= SIDEBAR: PAGE NAVIGATION ================= -->
@@ -37,6 +41,10 @@
       <button class="nav-item" data-view="reference">
         <div class="row1"><span>📖 Game Data</span></div>
         <div class="row2" id="navReferenceStats"></div>
+      </button>
+      <button class="nav-item" data-view="activity">
+        <div class="row1"><span>📜 Activity Log</span></div>
+        <div class="row2" id="navActivityStats"></div>
       </button>
     </nav>
 
@@ -119,6 +127,15 @@
           <button class="add-btn" id="addMaterialBtn">+ Add</button>
         </div>
         <div class="form-msg" id="materialMsg"></div>
+
+        <button class="add-line-btn" id="toggleBulkPasteBtn" style="margin-top:14px;">📋 Paste multiple at once</button>
+        <div id="bulkPasteArea" style="display:none; margin-top:12px;">
+          <textarea id="bulkPasteInput" class="bulk-paste-textarea" placeholder="one material per line: name, amount, price&#10;iron, 500, 12&#10;leather, 200, 8"></textarea>
+          <div class="form-actions" style="margin-top:8px;">
+            <button class="add-btn" id="bulkPasteAddBtn">Add All</button>
+          </div>
+          <div class="form-msg" id="bulkPasteMsg"></div>
+        </div>
       </div>
 
       <div class="section-label">
@@ -127,8 +144,10 @@
         <div class="rule"></div>
       </div>
 
+      <input type="text" class="search-box" id="materialSearch" placeholder="🔍 Search materials...">
+
       <div class="ledger-panel">
-        <table>
+        <table id="materialsTable">
           <thead>
             <tr>
               <th data-key="name" class="al">Name</th>
@@ -154,6 +173,7 @@
         <span class="num">01</span>
         <h2>Ready To Sell</h2>
         <div class="rule"></div>
+        <button class="section-btn" id="sellAllReadyBtn">💰 Sell All Ready</button>
       </div>
 
       <div class="ledger-panel" id="readyToSellPanel">
@@ -206,21 +226,24 @@
         <span class="num">03</span>
         <h2>Craftable Items</h2>
         <div class="rule"></div>
+        <button class="section-btn" id="craftAllMaxBtn">⚡ Craft All Max</button>
       </div>
 
+      <input type="text" class="search-box" id="recipeSearch" placeholder="🔍 Search craftable items...">
+
       <div class="ledger-panel">
-        <table>
+        <table id="recipesTable">
           <thead>
             <tr>
-              <th class="al">Name</th>
+              <th class="al" data-key="name">Name</th>
               <th class="al">Materials Needed</th>
-              <th>Cost / unit</th>
-              <th>Sell Price</th>
-              <th>Profit / unit</th>
-              <th>Max Craftable</th>
-              <th>Potential Profit</th>
-              <th>Crafted</th>
-              <th>On Hand</th>
+              <th data-key="cost">Cost / unit</th>
+              <th data-key="sellPrice">Sell Price</th>
+              <th data-key="profitUnit">Profit / unit</th>
+              <th data-key="max">Max Craftable</th>
+              <th data-key="potential">Potential Profit</th>
+              <th data-key="crafted">Crafted</th>
+              <th data-key="onHand">On Hand</th>
               <th class="al"></th>
             </tr>
           </thead>
@@ -253,6 +276,8 @@
       <div class="entry-panel info-block">
         <p>This is the list of names confirmed to actually exist in <em>Guild Master – Idle Dungeons</em>. Once a category below has at least one entry, Inventory and Crafting will only let you add names that match this list — so you can't accidentally track something that isn't really in the game. An empty category places no restriction yet.</p>
         <p>I identified your game and checked its official community wiki directly. Its crafting and equipment pages are still marked "work in progress" there, with no recipe quantities published yet — so this list starts empty rather than filled with guesses. Add names below as you confirm them in-game, browse <a href="https://idleguildmaster.wiki.gg/" target="_blank" rel="noopener">idleguildmaster.wiki.gg</a> yourself, or paste me wiki text or a screenshot and I'll add exactly what's shown.</p>
+        <button class="save-btn" id="exportGameDataBtn" style="margin-top:4px;">⬇ Export Game Data (shareable)</button>
+        <p style="margin:8px 0 0 0; font-size:11px;">Contains only these two lists — no personal inventory, recipes, or amounts. Safe to hand to another player; they can load it with Import Backup on their own copy.</p>
       </div>
 
       <div class="section-label">
@@ -277,12 +302,12 @@
       </div>
 
       <div class="ledger-panel">
-        <table>
+        <table id="refMaterialsTable">
           <thead>
             <tr>
-              <th class="al">Name</th>
-              <th class="al">Note</th>
-              <th class="al">Source</th>
+              <th class="al" data-key="name">Name</th>
+              <th class="al" data-key="note">Note</th>
+              <th class="al" data-key="source">Source</th>
               <th class="al"></th>
             </tr>
           </thead>
@@ -325,19 +350,44 @@
       </div>
 
       <div class="ledger-panel">
-        <table>
+        <table id="refCraftablesTable">
           <thead>
             <tr>
-              <th class="al">Name</th>
+              <th class="al" data-key="name">Name</th>
               <th class="al">Materials Needed</th>
-              <th>Sell Price</th>
-              <th class="al">Note</th>
-              <th class="al">Source</th>
+              <th data-key="sellPrice">Sell Price</th>
+              <th class="al" data-key="note">Note</th>
+              <th class="al" data-key="source">Source</th>
               <th class="al"></th>
             </tr>
           </thead>
           <tbody id="refCraftablesBody">
             <tr class="empty-row"><td colspan="6">No known craftable items yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ================= ACTIVITY LOG VIEW ================= -->
+    <div id="view-activity" class="view">
+
+      <div class="section-label">
+        <span class="num">01</span>
+        <h2>Activity Log</h2>
+        <div class="rule"></div>
+        <button class="section-btn" id="clearActivityLogBtn">Clear Log</button>
+      </div>
+
+      <div class="ledger-panel">
+        <table>
+          <thead>
+            <tr>
+              <th class="al" style="width:150px;">When</th>
+              <th class="al">Activity</th>
+            </tr>
+          </thead>
+          <tbody id="activityLogBody">
+            <tr class="empty-row"><td colspan="2">Nothing logged yet — actions you take will show up here.</td></tr>
           </tbody>
         </table>
       </div>
