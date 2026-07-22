@@ -496,65 +496,97 @@ function recipeMaxCraftable(recipe){
   });
   return Math.max(0, max);
 }
-/* Same as recipeMaxCraftable, but pretends one specific material only has
-   `overrideAmount` left instead of its real remaining stock. Used to work
-   out "if only X of this material were left, how many could I still make" —
-   the basis of the split-vs-go-all-in comparison below. */
-function recipeMaxCraftableWithOverride(recipe, overrideMaterialId, overrideAmount){
-  if(recipe.materials.length === 0) return 0;
-  if(recipeHasMissingMaterial(recipe)) return 0;
-  let max = Infinity;
-  recipe.materials.forEach(line=>{
-    if(line.qty <= 0){ max = 0; return; }
-    const available = (line.materialId === overrideMaterialId)
-      ? overrideAmount
-      : remaining(getMaterial(line.materialId));
-    max = Math.min(max, Math.floor(available / line.qty));
-  });
-  return Math.max(0, max);
-}
 function recipeProfitPerUnit(recipe){ return recipe.sellPrice - recipeCost(recipe); }
 function recipePotentialProfit(recipe){ return recipeProfitPerUnit(recipe) * recipeMaxCraftable(recipe); }
 
-/* For a given material and its top-ranked recipe, works out how much of
-   that material the top recipe would actually consume (it may be capped
-   by a DIFFERENT material well before this one runs out), whether
-   anything's left over, and how much extra profit splitting that leftover
-   into the next-best recipe would add. Returns null when there's nothing
-   meaningful to report (no leftover, or no second recipe to give it to). */
-function computeSplitInsight(material, rankedForThisMaterial){
-  if(rankedForThisMaterial.length < 1) return null;
-  const top = rankedForThisMaterial[0];
-  if(top.potential <= 0) return null;
+/* =========================================================
+   OPTIMAL CRAFTING PLAN — the correct, whole-inventory answer.
+   Every recipe competes for the SAME shared pool of materials, not just
+   the ones in its own "material group." So instead of judging each
+   material in isolation (which let two different groups each assume they
+   had the full amount of a material they actually both needed), this
+   walks every recipe ONCE, highest profit-per-unit first, and each
+   recipe's allocation is computed against whatever a HIGHER-priority
+   recipe hasn't already claimed. That's the only way to avoid double-
+   spending a material two different recommendations both counted on.
 
-  const topLine = top.recipe.materials.find(l => l.materialId === material.id);
-  if(!topLine) return null;
+   This is a greedy heuristic, not a guaranteed mathematically-optimal
+   solver (true optimality across many shared constraints is a linear
+   programming problem, a heavier kind of calculation). In practice,
+   "always make whatever's most profitable per unit first, with whatever
+   materials haven't been claimed yet" is a strong, transparent, and
+   explainable answer — and critically, it never double-counts a shared
+   material the way the old per-material view could.
+   ========================================================= */
+function computeOptimalCraftingPlan(){
+  const workingRemaining = {};
+  materials.forEach(m => { workingRemaining[m.id] = remaining(m); });
 
-  const topMax = recipeMaxCraftable(top.recipe);
-  const consumed = topMax * topLine.qty;
-  const leftover = remaining(material) - consumed;
-  if(leftover <= 0) return null; // top recipe already soaks up all of it — nothing to split
+  const candidates = recipes
+    .filter(r => !recipeHasMissingMaterial(r) && r.materials.length > 0 && recipeProfitPerUnit(r) > 0)
+    .sort((a,b) => recipeProfitPerUnit(b) - recipeProfitPerUnit(a));
 
-  const second = rankedForThisMaterial[1];
-  if(!second) return null;
+  const plan = [];
+  let totalProfit = 0;
 
-  const secondLine = second.recipe.materials.find(l => l.materialId === material.id);
-  if(!secondLine) return null;
+  candidates.forEach(recipe=>{
+    let units = Infinity;
+    recipe.materials.forEach(line=>{
+      const avail = workingRemaining[line.materialId] || 0;
+      units = Math.min(units, Math.floor(avail / line.qty));
+    });
+    units = (units === Infinity) ? 0 : Math.max(0, units);
+    if(units <= 0) return;
 
-  const extraUnits = recipeMaxCraftableWithOverride(second.recipe, material.id, leftover);
-  if(extraUnits <= 0) return null;
+    recipe.materials.forEach(line=>{
+      workingRemaining[line.materialId] -= line.qty * units;
+    });
 
-  const extraProfit = extraUnits * recipeProfitPerUnit(second.recipe);
-  if(extraProfit <= 0) return null;
+    const profit = units * recipeProfitPerUnit(recipe);
+    totalProfit += profit;
+    plan.push({ recipe, units, profit });
+  });
 
-  return {
-    topName: top.recipe.name,
-    topMax, consumed, leftover,
-    secondName: second.recipe.name,
-    extraUnits, extraProfit,
-    allInTotal: top.potential,
-    splitTotal: top.potential + extraProfit
-  };
+  return { plan, totalProfit };
+}
+
+/* Actually crafts the plan above — used by both the "Optimal Crafting
+   Plan" section's Apply button AND the Craftable Items "Craft All Max"
+   button, so there's exactly one correct implementation instead of two
+   that could disagree with each other. */
+function applyOptimalPlan(){
+  const { plan, totalProfit } = computeOptimalCraftingPlan();
+  if(plan.length === 0) return { craftedCount: 0, totalProfit: 0 };
+
+  plan.forEach(({recipe, units})=>{
+    recipe.materials.forEach(line=>{
+      const mat = getMaterial(line.materialId);
+      if(mat) mat.used += line.qty * units;
+    });
+    recipe.crafted = (recipe.crafted || 0) + units;
+  });
+
+  saveMaterials();
+  saveRecipes();
+  return { craftedCount: plan.length, totalProfit };
+}
+
+function renderOptimalPlan(){
+  const panel = document.getElementById('planPanel');
+  const { plan, totalProfit } = computeOptimalCraftingPlan();
+
+  if(plan.length === 0){
+    panel.innerHTML = '<div class="plan-empty">Nothing craftable right now — either you\'re out of materials, or no recipe currently turns a profit.</div>';
+    return;
+  }
+
+  const rows = plan.map((p, i)=>`<div class="plan-row">
+    <span><span class="plan-rank">${i+1}.</span><span class="plan-name">${escapeHtml(p.recipe.name)}</span> <span class="plan-units">× ${fmt(p.units)}</span></span>
+    <span class="profit-pos">+${fmt(p.profit)}</span>
+  </div>`).join('');
+
+  panel.innerHTML = `${rows}
+    <div class="plan-total"><span>Total if applied</span><span class="profit-pos">+${fmt(totalProfit)}</span></div>`;
 }
 
 /* =========================================================
@@ -571,6 +603,7 @@ function render(){
     renderRecipesTable();
     renderReadyToSell();
     renderOpportunity();
+    renderOptimalPlan();
   } else if(currentView === 'reference'){
     renderReferenceTables();
     renderRefCraftDraftMaterials();
@@ -1256,29 +1289,18 @@ function doSell(id){
 /* Bulk actions — craft every recipe up to its own max at once, or sell
    everything currently on hand at once, instead of going row by row. */
 function craftAllMax(){
-  let craftedCount = 0;
-  recipes.forEach(recipe=>{
-    const max = recipeMaxCraftable(recipe);
-    if(max <= 0) return;
-    recipe.materials.forEach(line=>{
-      const mat = getMaterial(line.materialId);
-      if(mat) mat.used += line.qty * max;
-    });
-    recipe.crafted = (recipe.crafted || 0) + max;
-    craftedCount++;
-  });
   const msg = document.getElementById('recipeMsg');
+  const { craftedCount, totalProfit } = applyOptimalPlan();
+
   if(craftedCount === 0){
-    msg.textContent = "Nothing to craft — you're out of materials for every recipe.";
+    msg.textContent = "Nothing to craft — either you're out of materials, or no recipe currently turns a profit.";
     msg.className = 'form-msg';
     return;
   }
-  saveMaterials();
-  saveRecipes();
   render();
-  msg.textContent = `Crafted the max on ${craftedCount} recipe${craftedCount===1?'':'s'}.`;
+  msg.textContent = `Crafted the max on ${craftedCount} recipe${craftedCount===1?'':'s'} for +${fmt(totalProfit)}.`;
   msg.className = 'form-msg ok';
-  logActivity(`Craft All Max — crafted the max on ${craftedCount} recipe${craftedCount===1?'':'s'}`);
+  logActivity(`Craft All Max — crafted ${craftedCount} recipe${craftedCount===1?'':'s'} for +${fmt(totalProfit)}`);
 }
 
 function sellAllReady(){
@@ -1378,22 +1400,16 @@ function renderOpportunity(){
       </div>`;
     }).join('');
 
-    const insight = computeSplitInsight(mat, related);
-    const insightHtml = insight ? `<div class="split-insight">
-      💡 Crafting only <strong>${escapeHtml(insight.topName)}</strong> to its max uses ${fmt(insight.consumed)} of your ${fmt(remaining(mat))} ${escapeHtml(mat.name)}, leaving <strong>${fmt(insight.leftover)} unused</strong>.
-      Splitting that leftover into <strong>${escapeHtml(insight.secondName)}</strong> makes ${fmt(insight.extraUnits)} more, adding <span class="profit-pos">+${fmt(insight.extraProfit)}</span>
-      — ${fmt(insight.allInTotal)} going all-in vs <span class="profit-pos">${fmt(insight.splitTotal)}</span> split.
-    </div>` : '';
-
     return `<div class="material-group">
       <div class="material-group-head">
         <span class="material-group-name">${escapeHtml(mat.name)}</span>
         <span class="material-group-meta">${fmt(remaining(mat))} remaining · ${fmt(mat.price)}/unit</span>
       </div>
       ${rows}
-      ${insightHtml}
     </div>`;
   }).join('');
+
+  panel.innerHTML += `<p class="opp-footer-note">This ranks each material on its own — useful to see what competes for it, but it doesn't account for materials shared with recipes outside this list. For the one number that does, see the Optimal Crafting Plan below.</p>`;
 
   const unusedCount = materials.length - usedMaterials.length;
   if(unusedCount > 0){
@@ -1681,6 +1697,7 @@ document.getElementById('recipeSearch').addEventListener('input', (e)=>{
   renderRecipesTable();
 });
 document.getElementById('craftAllMaxBtn').addEventListener('click', craftAllMax);
+document.getElementById('applyPlanBtn').addEventListener('click', craftAllMax);
 document.getElementById('sellAllReadyBtn').addEventListener('click', sellAllReady);
 document.getElementById('undoBtn').addEventListener('click', performUndo);
 
