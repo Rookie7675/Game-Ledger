@@ -496,8 +496,66 @@ function recipeMaxCraftable(recipe){
   });
   return Math.max(0, max);
 }
+/* Same as recipeMaxCraftable, but pretends one specific material only has
+   `overrideAmount` left instead of its real remaining stock. Used to work
+   out "if only X of this material were left, how many could I still make" —
+   the basis of the split-vs-go-all-in comparison below. */
+function recipeMaxCraftableWithOverride(recipe, overrideMaterialId, overrideAmount){
+  if(recipe.materials.length === 0) return 0;
+  if(recipeHasMissingMaterial(recipe)) return 0;
+  let max = Infinity;
+  recipe.materials.forEach(line=>{
+    if(line.qty <= 0){ max = 0; return; }
+    const available = (line.materialId === overrideMaterialId)
+      ? overrideAmount
+      : remaining(getMaterial(line.materialId));
+    max = Math.min(max, Math.floor(available / line.qty));
+  });
+  return Math.max(0, max);
+}
 function recipeProfitPerUnit(recipe){ return recipe.sellPrice - recipeCost(recipe); }
 function recipePotentialProfit(recipe){ return recipeProfitPerUnit(recipe) * recipeMaxCraftable(recipe); }
+
+/* For a given material and its top-ranked recipe, works out how much of
+   that material the top recipe would actually consume (it may be capped
+   by a DIFFERENT material well before this one runs out), whether
+   anything's left over, and how much extra profit splitting that leftover
+   into the next-best recipe would add. Returns null when there's nothing
+   meaningful to report (no leftover, or no second recipe to give it to). */
+function computeSplitInsight(material, rankedForThisMaterial){
+  if(rankedForThisMaterial.length < 1) return null;
+  const top = rankedForThisMaterial[0];
+  if(top.potential <= 0) return null;
+
+  const topLine = top.recipe.materials.find(l => l.materialId === material.id);
+  if(!topLine) return null;
+
+  const topMax = recipeMaxCraftable(top.recipe);
+  const consumed = topMax * topLine.qty;
+  const leftover = remaining(material) - consumed;
+  if(leftover <= 0) return null; // top recipe already soaks up all of it — nothing to split
+
+  const second = rankedForThisMaterial[1];
+  if(!second) return null;
+
+  const secondLine = second.recipe.materials.find(l => l.materialId === material.id);
+  if(!secondLine) return null;
+
+  const extraUnits = recipeMaxCraftableWithOverride(second.recipe, material.id, leftover);
+  if(extraUnits <= 0) return null;
+
+  const extraProfit = extraUnits * recipeProfitPerUnit(second.recipe);
+  if(extraProfit <= 0) return null;
+
+  return {
+    topName: top.recipe.name,
+    topMax, consumed, leftover,
+    secondName: second.recipe.name,
+    extraUnits, extraProfit,
+    allInTotal: top.potential,
+    splitTotal: top.potential + extraProfit
+  };
+}
 
 /* =========================================================
    TOP-LEVEL RENDER
@@ -1304,7 +1362,7 @@ function renderOpportunity(){
   panel.innerHTML = usedMaterials.map(mat=>{
     const related = recipes
       .filter(r => r.materials.some(line => line.materialId === mat.id))
-      .map(r => ({ name:r.name, potential: recipePotentialProfit(r) }));
+      .map(r => ({ recipe:r, name:r.name, potential: recipePotentialProfit(r) }));
 
     related.sort((a,b) => b.potential - a.potential);
     const maxAbs = Math.max(...related.map(x => Math.abs(x.potential)), 1);
@@ -1320,12 +1378,20 @@ function renderOpportunity(){
       </div>`;
     }).join('');
 
+    const insight = computeSplitInsight(mat, related);
+    const insightHtml = insight ? `<div class="split-insight">
+      💡 Crafting only <strong>${escapeHtml(insight.topName)}</strong> to its max uses ${fmt(insight.consumed)} of your ${fmt(remaining(mat))} ${escapeHtml(mat.name)}, leaving <strong>${fmt(insight.leftover)} unused</strong>.
+      Splitting that leftover into <strong>${escapeHtml(insight.secondName)}</strong> makes ${fmt(insight.extraUnits)} more, adding <span class="profit-pos">+${fmt(insight.extraProfit)}</span>
+      — ${fmt(insight.allInTotal)} going all-in vs <span class="profit-pos">${fmt(insight.splitTotal)}</span> split.
+    </div>` : '';
+
     return `<div class="material-group">
       <div class="material-group-head">
         <span class="material-group-name">${escapeHtml(mat.name)}</span>
         <span class="material-group-meta">${fmt(remaining(mat))} remaining · ${fmt(mat.price)}/unit</span>
       </div>
       ${rows}
+      ${insightHtml}
     </div>`;
   }).join('');
 
