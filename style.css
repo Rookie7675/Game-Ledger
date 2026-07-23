@@ -778,6 +778,36 @@ tbody tr.flash-row td{ animation:flashHighlight 1.2s ease; }
   font-size:15px;
   font-weight:600;
 }
+.plan-skip-btn{
+  background:none;
+  border:1px solid var(--line);
+  color:var(--text-dim);
+  font-family:'IBM Plex Mono', monospace;
+  font-size:10px;
+  text-transform:uppercase;
+  padding:4px 9px;
+  cursor:pointer;
+}
+.plan-skip-btn:hover{ border-color:var(--red); color:var(--red); }
+
+.plan-toggle-btn{
+  width:26px;
+  height:26px;
+  background:none;
+  border:1px solid var(--gold);
+  color:var(--gold-bright);
+  font-size:13px;
+  cursor:pointer;
+  line-height:1;
+}
+.plan-toggle-btn.in:hover{ background:var(--gold); color:var(--ink); }
+.plan-toggle-btn.out{
+  border-color:var(--line);
+  color:var(--text-dim);
+}
+.plan-toggle-btn.out:hover{ border-color:var(--gold-bright); color:var(--gold-bright); }
+tbody tr.excluded-from-plan{ opacity:0.55; }
+tbody tr.excluded-from-plan:hover{ opacity:0.8; }
 .foot-note{
   margin-top:36px;
   font-family:'IBM Plex Mono', monospace;

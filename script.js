@@ -321,7 +321,8 @@ function mergeImportedState(state){
       sellPrice: typeof ir.sellPrice === 'number' ? ir.sellPrice : 0,
       materials: remapped,
       crafted: typeof ir.crafted === 'number' ? ir.crafted : 0,
-      sold: typeof ir.sold === 'number' ? ir.sold : 0
+      sold: typeof ir.sold === 'number' ? ir.sold : 0,
+      includeInPlan: ir.includeInPlan !== false
     });
     counts.recipesAdded++;
   });
@@ -499,6 +500,15 @@ function recipeMaxCraftable(recipe){
 function recipeProfitPerUnit(recipe){ return recipe.sellPrice - recipeCost(recipe); }
 function recipePotentialProfit(recipe){ return recipeProfitPerUnit(recipe) * recipeMaxCraftable(recipe); }
 
+function toggleIncludeInPlan(id){
+  const recipe = recipes.find(r=>r.id===id);
+  if(!recipe) return;
+  recipe.includeInPlan = (recipe.includeInPlan === false) ? true : false;
+  saveRecipes();
+  logActivity(`${recipe.includeInPlan===false ? 'Excluded' : 'Included'} "${recipe.name}" ${recipe.includeInPlan===false ? 'from' : 'in'} the Optimal Crafting Plan`);
+  render();
+}
+
 /* =========================================================
    OPTIMAL CRAFTING PLAN — the correct, whole-inventory answer.
    Every recipe competes for the SAME shared pool of materials, not just
@@ -523,7 +533,7 @@ function computeOptimalCraftingPlan(){
   materials.forEach(m => { workingRemaining[m.id] = remaining(m); });
 
   const candidates = recipes
-    .filter(r => !recipeHasMissingMaterial(r) && r.materials.length > 0 && recipeProfitPerUnit(r) > 0)
+    .filter(r => r.includeInPlan !== false && !recipeHasMissingMaterial(r) && r.materials.length > 0 && recipeProfitPerUnit(r) > 0)
     .sort((a,b) => recipeProfitPerUnit(b) - recipeProfitPerUnit(a));
 
   const plan = [];
@@ -574,19 +584,26 @@ function applyOptimalPlan(){
 function renderOptimalPlan(){
   const panel = document.getElementById('planPanel');
   const { plan, totalProfit } = computeOptimalCraftingPlan();
+  const excludedCount = recipes.filter(r => r.includeInPlan === false).length;
+  const excludedNote = excludedCount > 0
+    ? `<p class="opp-footer-note" style="margin-bottom:12px;">${excludedCount} recipe${excludedCount===1?"'s":"s'"} sitting out of the plan on purpose — the ✓/— toggle in the Craftable Items table controls this.</p>`
+    : '';
 
   if(plan.length === 0){
-    panel.innerHTML = '<div class="plan-empty">Nothing craftable right now — either you\'re out of materials, or no recipe currently turns a profit.</div>';
+    panel.innerHTML = excludedNote + `<div class="plan-empty">Nothing craftable right now — either you're out of materials, no recipe currently turns a profit, or everything's been excluded below.</div>`;
     return;
   }
 
   const rows = plan.map((p, i)=>`<div class="plan-row">
     <span><span class="plan-rank">${i+1}.</span><span class="plan-name">${escapeHtml(p.recipe.name)}</span> <span class="plan-units">× ${fmt(p.units)}</span></span>
-    <span class="profit-pos">+${fmt(p.profit)}</span>
+    <span style="display:flex; align-items:center; gap:10px;">
+      <span class="profit-pos">+${fmt(p.profit)}</span>
+      <button class="plan-skip-btn" onclick="toggleIncludeInPlan('${p.recipe.id}')" title="Leave this out of the plan">Skip</button>
+    </span>
   </div>`).join('');
 
-  panel.innerHTML = `${rows}
-    <div class="plan-total"><span>Total if applied</span><span class="profit-pos">+${fmt(totalProfit)}</span></div>`;
+  panel.innerHTML = excludedNote + rows +
+    `<div class="plan-total"><span>Total if applied</span><span class="profit-pos">+${fmt(totalProfit)}</span></div>`;
 }
 
 /* =========================================================
@@ -1079,7 +1096,7 @@ function saveRecipe(){
     msg.className='form-msg ok';
     logActivity(`Updated recipe "${name}"`);
   } else {
-    recipes.push({ id:'rec_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), name, sellPrice, materials: cleanMaterials });
+    recipes.push({ id:'rec_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), name, sellPrice, materials: cleanMaterials, includeInPlan: true });
     msg.textContent = 'Recipe saved.' + (autoRegistered ? ' Also added to Game Data.' : '');
     logActivity(`Saved new recipe "${name}"`);
     msg.className='form-msg ok';
@@ -1166,7 +1183,7 @@ function renderRecipesTable(){
   applySortClasses(thead, 'recipes');
 
   if(recipes.length === 0){
-    body.innerHTML = '<tr class="empty-row"><td colspan="10">No craftable items yet.</td></tr>';
+    body.innerHTML = '<tr class="empty-row"><td colspan="11">No craftable items yet.</td></tr>';
     return;
   }
 
@@ -1187,7 +1204,7 @@ function renderRecipesTable(){
   let visible = q ? withCalc.filter(x => x.recipe.name.toLowerCase().includes(q)) : withCalc;
 
   if(visible.length === 0){
-    body.innerHTML = '<tr class="empty-row"><td colspan="10">No craftable items match your search.</td></tr>';
+    body.innerHTML = '<tr class="empty-row"><td colspan="11">No craftable items match your search.</td></tr>';
     return;
   }
 
@@ -1212,8 +1229,9 @@ function renderRecipesTable(){
     const profitClass = x.profitUnit >= 0 ? 'profit-pos' : 'profit-neg';
     const isBest = r.id === bestId && bestPotential > 0;
     const canCraft = x.max > 0 && !x.missing;
+    const included = r.includeInPlan !== false;
 
-    return `<tr class="${isBest ? 'best' : ''} ${x.missing ? 'warn' : ''}">
+    return `<tr class="${isBest ? 'best' : ''} ${x.missing ? 'warn' : ''} ${included ? '' : 'excluded-from-plan'}">
       <td class="al name-cell">${escapeHtml(r.name)} ${isBest ? '<span class="badge">Best</span>' : ''} ${x.missing ? '<span class="badge warn-badge">Fix recipe</span>' : ''}</td>
       <td class="al mat-list">${matList}</td>
       <td>${fmt(x.cost)}</td>
@@ -1223,6 +1241,9 @@ function renderRecipesTable(){
       <td class="${x.potential>=0?'profit-pos':'profit-neg'}">${x.potential>=0?'+':''}${fmt(x.potential)}</td>
       <td>${fmt(r.crafted||0)}</td>
       <td>${fmt(x.onHand)}</td>
+      <td>
+        <button class="plan-toggle-btn ${included ? 'in' : 'out'}" onclick="toggleIncludeInPlan('${r.id}')" title="${included ? 'Included — click to exclude from the plan' : 'Excluded — click to include in the plan'}">${included ? '✓' : '—'}</button>
+      </td>
       <td class="al">
         <div class="row-actions" style="margin-bottom:6px;">
           <button class="icon-btn" onclick="startEditRecipe('${r.id}')" title="Edit">✎</button>
